@@ -1,0 +1,22 @@
+model:
+  model_name: PanguWeather
+  loss_name: mse # mse or mae
+  num_inter_steps: 1 # Number of intermediary steps [without any data]
+  num_samples_to_plot: 1
+  training_strategy: scaled_ar # diff_ar or scaled_ar or downscaling_only
+  channels_last: False # True: B W H C
+  io_conf : null
+  mask_ratio : 0 # 0<mask_ratio<1. If !=0 apply maskedautoencoderstrategy.
+  settings_init_args:
+    plevel_patch_size: [2, 4, 4]
+    token_size: 192
+    layer_depth: [2, 6]
+    num_heads: [6, 12]
+    spatial_dims: 2
+    surface_variables: 4
+    plevel_variables: 5
+    plevels: 13
+    window_size: [2, 6, 12]
+    dropout_rate: 0.
+    checkpoint_activation: False
+    lam: False
