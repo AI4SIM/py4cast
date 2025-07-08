@@ -418,6 +418,7 @@ class Sample:
                 param=param,
                 timestamps=self.timestamps,
                 file_format=self.settings.file_format,
+                num_input_steps=self.settings.num_input_steps,
             ):
                 return False
         return True
