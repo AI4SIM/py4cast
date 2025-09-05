@@ -398,6 +398,8 @@ class SamplePreprocSettings:
     standardize: bool = True
     file_format: Literal["npy", "grib"] = "grib"
     members: Optional[Tuple[int]] = None
+    noise_members: int = 0
+    noise_strategy: Literal["forcing", "CondLayerNorm", "None"] = "forcing",
     add_landsea_mask: bool = False
 
 

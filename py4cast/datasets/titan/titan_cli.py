@@ -50,6 +50,8 @@ def prepare(
     num_input_steps: int = 1,
     num_pred_steps_train: int = 1,
     num_pred_steps_val_test: int = 1,
+    noise_members: int = 0,
+    noise_strategy: str = "None",
     convert_grib2npy: bool = False,
     compute_stats: bool = True,
 ):
@@ -72,6 +74,8 @@ def prepare(
         num_input_steps=num_input_steps,
         num_pred_steps_train=num_pred_steps_train,
         num_pred_steps_val_test=num_pred_steps_val_test,
+        noise_members=noise_members,
+        noise_strategy=noise_strategy,
     )
     train_ds.cache_dir.mkdir(exist_ok=True)
     data_dir = train_ds.cache_dir / "data"

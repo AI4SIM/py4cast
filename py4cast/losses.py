@@ -13,6 +13,49 @@ from torch.nn import MSELoss
 from py4cast.datasets.base import DatasetInfo, NamedTensor
 
 
+class AlmostFairCRPS(torch.nn.Module): # Batched Almost Fair CRPS
+    """
+    AIFS-CRPS: Ensemble forecasting using a model trained with a loss function based on the Continuous Ranked Probability Score
+    https://arxiv.org/abs/2412.15832
+    """
+    def __init__(self, alpha=0.95):
+        super().__init__()
+        self.alpha = alpha
+
+    def forward(self, preds, targets, noise_members=2):
+
+        B = targets.shape[0] // noise_members  # effective batch size 
+        M = noise_members  # Number of ensemble members
+        epsilon = (1 - self.alpha) / M
+
+        # Reshape predictions and targets
+        preds = preds.view(B, M, *preds.shape[1:])        # (B, M, T, W, H, d_f)
+        targets = targets.view(B, M, *targets.shape[1:])    # (B, M, T, W, H, d_f)
+
+        abs_diff = torch.abs(preds - targets)             # (B, M, T, W, H, d_f)
+
+        # Pairwise differences: |x_j - x_k|
+        preds_j = preds.unsqueeze(2)                      # (B, M, 1, T, W, H, d_f)
+        preds_k = preds.unsqueeze(1)                      # (B, 1, M, T, W, H, d_f)
+        pairwise_diff = torch.abs(preds_j - preds_k)      # (B, M, M, T, W, H, d_f)
+
+        # |x_j - y| + |x_k - y|
+        abs_j = abs_diff.unsqueeze(2)                     # (B, M, 1, T, W, H, d_f)
+        abs_k = abs_diff.unsqueeze(1)                     # (B, 1, M, T, W, H, d_f)
+        pairwise_abs_sum = abs_j + abs_k                  # (B, M, M, T, W, H, d_f)
+
+        # Create off-diagonal mask (M, M)
+        mask = ~torch.eye(M, dtype=torch.bool, device=preds.device)  # (M, M)
+
+        # Apply mask per batch element
+        pairwise_diff = pairwise_diff[:, mask].view(B, M, M - 1, *preds.shape[2:])
+        pairwise_abs_sum = pairwise_abs_sum[:, mask].view(B, M, M - 1, *preds.shape[2:])
+
+        # Final computation
+        afcrps = (pairwise_abs_sum - (1 - epsilon) * pairwise_diff).mean(dim=(1, 2)) / 2  # (B, T, W, H, d_f)
+        return afcrps
+
+
 class Py4CastLoss(ABC):
     """
     Abstract class to force the user to implement the prepare and forward method because
@@ -21,7 +64,12 @@ class Py4CastLoss(ABC):
     """
 
     def __init__(self, loss: str, *args, **kwargs) -> None:
-        self.loss = getattr(torch.nn, loss)(*args, **kwargs)
+        if loss in ["MSELoss", "L1Loss"]:
+            self.loss = getattr(torch.nn, loss)(*args, **kwargs)
+        elif loss == "AFCRPS":
+            self.loss = AlmostFairCRPS()
+        else:
+            raise ValueError("Unrecognized loss function")
 
     @abstractmethod
     def prepare(
@@ -109,6 +157,7 @@ class WeightedLoss(Py4CastLoss):
         prediction: NamedTensor,
         target: NamedTensor,
         mask: torch.Tensor,
+        noise_members: int = 2,
         reduce_spatial_dim=True,
     ) -> torch.Tensor:
         """
@@ -117,7 +166,12 @@ class WeightedLoss(Py4CastLoss):
         returns (B, pred_steps)
         """
         # Compute Torch loss (defined in the parent class when this Mixin is used)
-        torch_loss = self.loss(prediction.tensor * mask, target.tensor * mask)
+        if noise_members > 1:
+            torch_loss = self.loss(prediction.tensor * mask, target.tensor * mask, noise_members=noise_members)
+        else:
+            if self.loss.__class__ == AlmostFairCRPS:
+                raise ValueError("When using AFCRPS loss, noise_members must be > 1")
+            torch_loss = self.loss(prediction.tensor * mask, target.tensor * mask)
 
         # Retrieve the weights for each feature
         weights = self.weights(tuple(prediction.feature_names), prediction.device)
