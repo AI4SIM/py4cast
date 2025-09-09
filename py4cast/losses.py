@@ -24,13 +24,14 @@ class AlmostFairCRPS(torch.nn.Module): # Batched Almost Fair CRPS
 
     def forward(self, preds, targets, noise_members=2):
 
-        B = targets.shape[0] // noise_members  # effective batch size 
+        B = targets.shape[0] # effective batch size 
         M = noise_members  # Number of ensemble members
         epsilon = (1 - self.alpha) / M
 
-        # Reshape predictions and targets
-        preds = preds.view(B, M, *preds.shape[1:])        # (B, M, T, W, H, d_f)
-        targets = targets.view(B, M, *targets.shape[1:])    # (B, M, T, W, H, d_f)
+        # Reshape predictions 
+        preds = preds.reshape(B, M, *preds.shape[1:])        # (B, M, T, W, H, d_f)
+        # Replicate targets along the members dimension
+        targets = targets.unsqueeze(1).expand(-1, M, -1, -1, -1, -1)  # (B, M, T, W, H, d_f)
 
         abs_diff = torch.abs(preds - targets)             # (B, M, T, W, H, d_f)
 
@@ -141,12 +142,9 @@ class WeightedLoss(Py4CastLoss):
         # build the dictionnary of weight
         loss_state_weight = {}
 
-        exponent = 2.0 if self.loss.__class__ == MSELoss else 1.0
-
         for name in dataset_info.state_weights:
-            loss_state_weight[name] = dataset_info.state_weights[name] / (
-                dataset_info.diff_stats[name]["std"] ** exponent
-            )
+            loss_state_weight[name] = torch.tensor(dataset_info.state_weights[name])
+            
         self.register_loss_state_buffers(
             lm, interior_mask, loss_state_weight, squeeze_mask=True
         )
@@ -167,7 +165,7 @@ class WeightedLoss(Py4CastLoss):
         """
         # Compute Torch loss (defined in the parent class when this Mixin is used)
         if noise_members > 1:
-            torch_loss = self.loss(prediction.tensor * mask, target.tensor * mask, noise_members=noise_members)
+            torch_loss = self.loss(prediction.tensor * mask.repeat(noise_members, 1, 1, 1, 1) , target.tensor * mask, noise_members=noise_members)
         else:
             if self.loss.__class__ == AlmostFairCRPS:
                 raise ValueError("When using AFCRPS loss, noise_members must be > 1")

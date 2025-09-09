@@ -500,15 +500,6 @@ class Sample:
             timedeltas=self.output_timestamps.timedeltas,
             grid=self.grid,
         )
-        # Additional noise channel as forcing
-        if self.settings.noise_strategy == "forcing":
-            external_forcings.append(
-                NamedTensor(
-                    feature_names=["noise"],
-                    tensor=torch.randn_like(external_forcings[-1].tensor),
-                    names=["timestep", "lat", "lon", "features"],
-                )
-            )
 
         for forcing in external_forcings:
             forcing.unsqueeze_and_expand_from_(loutputs[0])
@@ -716,12 +707,7 @@ class DatasetABC(Dataset):
                     member,
                 )
                 if sample.is_valid():
-                    # replicate samples to match the number of noise members
-                    if self.settings.noise_members > 0:
-                        for k in range(self.settings.noise_members):
-                            samples.append(sample)
-                    else:
-                        samples.append(sample)
+                    samples.append(sample)
                 else:
                     invalid_samples += 1
         print(

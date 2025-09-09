@@ -577,9 +577,16 @@ class AutoRegressiveLightning(LightningModule):
             # Should be greater or equal to 1 (otherwise nothing is done).
             for k in range(num_inter_steps):
                 x = self._next_x(batch, prev_states, i)
+
                 if self.noise_strategy == "CondLayerNorm":
                     # generate (32,) noise vector for stochastic conditional layer normalization
-                    epsilon = torch.randn(self.batch_size, 32, device=prev_states.device)
+                    # Skillful joint probabilistic weather forecasting from marginals: https://arxiv.org/pdf/2506.10772
+                    epsilon = torch.randn(self.batch_size*self.noise_members, 32, device=prev_states.device)
+
+                elif self.noise_strategy == "forcing":
+                    # Add noise channel as forcing with noise=True
+                    x = self._next_x(batch, prev_states, i, noise=True)
+
                 # Graph (B, N_grid, d_f) or Conv (B, N_lat,N_lon d_f)
                 if self.channels_last:
                     x = x.to(memory_format=torch.channels_last)
@@ -589,12 +596,14 @@ class AutoRegressiveLightning(LightningModule):
                 if self.model.features_second:
                     x = features_last_to_second(x)
                     if self.noise_strategy == "CondLayerNorm":
+                        x = x.unsqueeze(1).expand(-1, self.noise_members, -1, -1, -1).reshape(self.batch_size*self.noise_members, *x.shape[1:])
                         y = self.model(x, cond_z=epsilon)
                     else:   
                         y = self.model(x)
                     y = features_second_to_last(y)
                 else:
                     if self.noise_strategy == "CondLayerNorm":
+                        x = x.unsqueeze(1).expand(-1, self.noise_members, -1, -1, -1).reshape(self.batch_size*self.noise_members, *x.shape[1:])
                         y = self.model(x, cond_z=epsilon)
                     else:
                         y = self.model(x)
@@ -606,6 +615,8 @@ class AutoRegressiveLightning(LightningModule):
                 if self.mask_on_nan:
                     last_prev_state = torch.nan_to_num(last_prev_state, nan=0)
 
+                if self.noise_members > 1:
+                    last_prev_state = last_prev_state.unsqueeze(1).expand(-1, self.noise_members, -1, -1, -1).reshape(self.batch_size*self.noise_members, *last_prev_state.shape[1:])
                 # We update the latest of our prev_states with the network output
                 if scale_y:
                     predicted_state = (
@@ -621,11 +632,12 @@ class AutoRegressiveLightning(LightningModule):
                 # Force it to true state for all intermediary step
                 if not (phase == "inference") and force_border:
                     new_state = (
-                        self.border_mask * border_state
-                        + self.interior_mask * predicted_state
+                        self.border_mask.expand_as(predicted_state) * border_state.repeat(self.noise_members, 1, 1, 1)
+                        + self.interior_mask.expand_as(predicted_state) * predicted_state
                     )
                 else:
                     new_state = predicted_state
+                    
 
                 # Only update the prev_states if we are not at the last step
                 if i < batch.num_pred_steps - 1 or k < num_inter_steps - 1:
@@ -704,7 +716,7 @@ class AutoRegressiveLightning(LightningModule):
         return step_diff_std, step_diff_mean
 
     def _next_x(
-        self, batch: ItemBatch, prev_states: NamedTensor, step_idx: int
+        self, batch: ItemBatch, prev_states: NamedTensor, step_idx: int, noise: bool = False
     ) -> torch.Tensor:
         """
         Build the next x input for the model at timestep step_idx using the :
@@ -753,11 +765,21 @@ class AutoRegressiveLightning(LightningModule):
 
         # If downscaling only, inputs are not concatenated: only use static features and forcings.
         x = torch.cat(
-            inputs * (1 - ds)  # = [] if downscaling strategy
-            + [self.grid_static_features[: batch.batch_size], forcing.tensor]
-            + mask_list,
-            dim=forcing.dim_index("features"),
-        )
+                    inputs * (1 - ds)  # = [] if downscaling strategy
+                    + [self.grid_static_features[: batch.batch_size], forcing.tensor]
+                    + mask_list,
+                    dim=forcing.dim_index("features"),
+                )
+
+        if noise and self.noise_strategy == "forcing":
+            # concatenate noise channel as a forcing
+            x = torch.cat(
+                [
+                    torch.cat([x, torch.randn_like(forcing.tensor[..., 0].unsqueeze(-1))], dim=forcing.dim_index("features")).unsqueeze(1) for _ in range(self.noise_members)
+                ],
+                dim=1,
+            )
+            x = x.reshape(self.batch_size*self.noise_members, *x.shape[2:])
 
         return x
 
@@ -903,6 +925,12 @@ class AutoRegressiveLightning(LightningModule):
         self.validation_step_losses.append(mean_loss)
 
         self.val_mean_loss = mean_loss
+
+        if self.noise_members > 1:
+            # select random member for preds
+            prediction_tensor = prediction.tensor.reshape(self.batch_size, self.noise_members, *prediction.tensor.shape[1:])
+            member = prediction_tensor[:, torch.randint(0, self.noise_members, (1,)).item()]
+            prediction = NamedTensor.new_like(member.type_as(prediction.tensor), prediction)
 
         self.validation_step_logging(batch, prediction, target, mask)
 
