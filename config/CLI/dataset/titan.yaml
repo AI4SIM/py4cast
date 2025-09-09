@@ -4,11 +4,10 @@ data:
   num_input_steps: 1
   num_pred_steps_train: 1
   num_pred_steps_val_test: 1
-  batch_size: 4 # per device    If afcrps loss used, has to be set as effective_batch_size*noise_members
+  batch_size: 3 # per device
 
   noise_strategy: "CondLayerNorm" # "forcing" or "CondLayerNorm" or "None"
   noise_members: 4 # total number of members
-  
   #other args
   num_workers: 2
   prefetch_factor: null
