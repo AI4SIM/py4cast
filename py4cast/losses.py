@@ -164,7 +164,7 @@ class WeightedLoss(Py4CastLoss):
         returns (B, pred_steps)
         """
         # Compute Torch loss (defined in the parent class when this Mixin is used)
-        if noise_members > 1:
+        if noise_members > 1 and self.loss.__class__ == AlmostFairCRPS:
             torch_loss = self.loss(prediction.tensor * mask.repeat(noise_members, 1, 1, 1, 1) , target.tensor * mask, noise_members=noise_members)
         else:
             if self.loss.__class__ == AlmostFairCRPS:

@@ -8,6 +8,7 @@ data:
 
   noise_strategy: "CondLayerNorm" # "forcing" or "CondLayerNorm" or "None"
   noise_members: 4 # total number of members
+  ensemble_metrics: True # spread over members, requires ensemble dataset and noise_members=1
   #other args
   num_workers: 2
   prefetch_factor: null

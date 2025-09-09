@@ -31,7 +31,7 @@ from py4cast.io.outputs import (
     save_named_tensors_to_grib,
 )
 from py4cast.losses import ScaledLoss, WeightedLoss
-from py4cast.metrics import MetricACC, MetricPSDK, MetricPSDVar
+from py4cast.metrics import MetricACC, MetricPSDK, MetricPSDVar, MetricSpread, MetricMapSpread
 from py4cast.models import build_model_from_settings, get_model_kls_and_settings
 from py4cast.models import registry as model_registry
 from py4cast.plots import (
@@ -39,6 +39,7 @@ from py4cast.plots import (
     PredictionTimestepPlot,
     SpatialErrorPlot,
     StateErrorPlot,
+    SpreadTimestepPlot,
 )
 from py4cast.utils import str_to_dtype
 
@@ -68,6 +69,7 @@ class PlDataModule(LightningDataModule):
         dataset_conf: Dict | None = None,
         noise_members: int = 0,
         noise_strategy: Literal["forcing", "CondLayerNorm", "None"] = "forcing",
+        ensemble_metrics: bool = False,
     ):
         super().__init__()
         self.num_input_steps = num_input_steps
@@ -83,6 +85,7 @@ class PlDataModule(LightningDataModule):
         self.pin_memory = pin_memory
         self.noise_members = noise_members
         self.noise_strategy = noise_strategy
+        self.ensemble_metrics = ensemble_metrics
 
         # Get dataset in initialisation to have access to this attribute before method trainer.fit
         self.train_ds, self.val_ds, self.test_ds = get_datasets(
@@ -172,6 +175,7 @@ class AutoRegressiveLightning(LightningModule):
         batch_size: int = 2,
         noise_members: int = 0,
         noise_strategy: Literal["forcing", "CondLayerNorm", "None"] = "forcing",
+        ensemble_metrics: bool = False,
         # non-linked args
         model_name: Literal[tuple(model_registry.keys())] = "HalfUNet",
         loss_name: Literal["mse", "mae", "afcrps"] = "mse",
@@ -200,6 +204,7 @@ class AutoRegressiveLightning(LightningModule):
         self.batch_size = batch_size
         self.noise_members = noise_members
         self.noise_strategy = noise_strategy
+        self.ensemble_metrics = ensemble_metrics
         self.model_name = model_name
         self.num_input_steps = num_input_steps
         self.num_pred_steps_train = num_pred_steps_train
@@ -334,6 +339,8 @@ class AutoRegressiveLightning(LightningModule):
             self.rmse_psd_plot_metric = MetricPSDVar(pred_step=max_pred_step)
             self.psd_plot_metric = MetricPSDK(self.save_path, pred_step=max_pred_step)
             self.acc_metric = MetricACC(self.dataset_info)
+            self.spread_metric = MetricSpread(self.dataset_info, pred_step=max_pred_step+1)
+            self.spread_map_metric = MetricMapSpread(self.dataset_info, pred_step=max_pred_step+1)
             self.configure_loggers()
 
     def configure_loggers(self):
@@ -1022,6 +1029,9 @@ class AutoRegressiveLightning(LightningModule):
                 loss.prepare(self, self.interior_mask, self.dataset_info)
                 metrics[alias] = loss
 
+            if self.ensemble_metrics:
+                metrics["std"] = self.spread_metric
+
             self.test_plotters = [
                 StateErrorPlot(metrics, save_path=self.save_path),
                 SpatialErrorPlot(),
@@ -1032,6 +1042,16 @@ class AutoRegressiveLightning(LightningModule):
                     save_path=self.save_path,
                 ),
             ]
+
+            if self.ensemble_metrics:
+                self.test_plotters.append(SpreadTimestepPlot(
+                    metric=self.spread_map_metric,
+                    dataset_name = self.dataset_info.name,
+                    num_samples_to_plot=self.num_samples_to_plot,
+                    num_features_to_plot=6,
+                    prefix="Test",
+                    save_path=self.save_path,
+                ))
 
     def test_step(self, batch: ItemBatch, batch_idx: int):
         """Runs test on single batch"""
