@@ -274,6 +274,7 @@ class AutoRegressiveLightning(LightningModule):
             + num_grid_static_features
             + dataset_info.forcing_dim
             + self.mask_on_nan
+            + (1 if self.noise_strategy == "forcing" else 0)
         )
 
         num_output_features = dataset_info.weather_dim

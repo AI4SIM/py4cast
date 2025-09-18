@@ -745,7 +745,6 @@ class DatasetABC(Dataset):
         """
         res = 4  # For date
         res += 1  # For solar forcing
-        res += 1 if self.settings.noise_strategy == "forcing" else 0 # additional noise channel
 
         for param in self.params:
             if param.kind == "input":
