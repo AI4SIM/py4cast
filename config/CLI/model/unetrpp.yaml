@@ -1,6 +1,6 @@
 model:
-  model_name: UNETRPP
-  loss_name: mse # mse or mae
+  model_name: UNetRPP
+  loss_name: afcrps # mse or mae or afcrps
   num_inter_steps: 1 # Number of intermediary steps (without any data)
   num_samples_to_plot: 1
   training_strategy: scaled_ar # diff_ar or scaled_ar or downscaling_only
@@ -28,3 +28,4 @@ model:
     encoder_proj_sizes: [64, 64, 64, 32]
     add_skip_connections: true
     attention_code: "torch"
+    CondLayerNorm: True # use ConditionalLayerNorm instead of LayerNorm

@@ -418,6 +418,7 @@ class Sample:
                 param=param,
                 timestamps=self.timestamps,
                 file_format=self.settings.file_format,
+                num_input_steps=self.settings.num_input_steps,
             ):
                 return False
         return True
@@ -721,6 +722,7 @@ class DatasetABC(Dataset):
         shuffle: bool = False,
         prefetch_factor: Union[int, None] = None,
         pin_memory: bool = False,
+        drop_last: bool = False,
     ) -> DataLoader:
         """
         Builds a torch dataloader from self.
@@ -733,6 +735,7 @@ class DatasetABC(Dataset):
             prefetch_factor=prefetch_factor,
             collate_fn=collate_fn,
             pin_memory=pin_memory,
+            drop_last=drop_last,
         )
 
     @cached_property
@@ -862,6 +865,8 @@ class DatasetABC(Dataset):
         num_input_steps: int,
         num_pred_steps_train: int,
         num_pred_steps_val_test: int,
+        noise_members: int,
+        noise_strategy: Literal["forcing", "CondLayerNorm", "None"],
     ) -> Tuple[Type["DatasetABC"], Type["DatasetABC"], Type["DatasetABC"]]:
         grid = Grid(load_grid_info_func=accessor_kls.load_grid_info, **conf["grid"])
 
@@ -877,6 +882,8 @@ class DatasetABC(Dataset):
             num_input_steps=num_input_steps,
             num_pred_steps=num_pred_steps_train,
             members=members,
+            noise_members=noise_members,
+            noise_strategy=noise_strategy,
             **conf["settings"],
         )
         train_period = Period(**conf["periods"]["train"], name="train")
@@ -889,6 +896,8 @@ class DatasetABC(Dataset):
             num_input_steps=num_input_steps,
             num_pred_steps=num_pred_steps_val_test,
             members=members,
+            noise_members=noise_members,
+            noise_strategy=noise_strategy,
             **conf["settings"],
         )
         valid_period = Period(**conf["periods"]["valid"], name="valid")
@@ -911,6 +920,8 @@ class DatasetABC(Dataset):
         num_input_steps: int,
         num_pred_steps_train: int,
         num_pred_steps_val_tests: int,
+        noise_members: int,
+        noise_strategy: Literal["forcing", "CondLayerNorm", "None"],
         predict_conf: Union[Dict, None] = None,
     ) -> Tuple[Type["DatasetABC"], Type["DatasetABC"], Type["DatasetABC"]]:
         """
@@ -931,4 +942,6 @@ class DatasetABC(Dataset):
             num_input_steps,
             num_pred_steps_train,
             num_pred_steps_val_tests,
+            noise_members,
+            noise_strategy,
         )

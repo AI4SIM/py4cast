@@ -426,6 +426,150 @@ class PredictionTimestepPlot(MapPlot):
                     paths, self.save_path / f"timestep_evol_per_param/{var_name}.gif"
                 )
 
+class SpreadTimestepPlot(MapPlot):
+    """
+    Observer used to plot prediction and target spread map for each timestep.
+    """
+
+    def __init__(
+        self,
+        metric: Metric,
+        dataset_name: str,
+        num_samples_to_plot: int,
+        num_features_to_plot: Union[None, int] = None,
+        prefix: str = "Test",
+        save_path: Path = None,
+    ):
+        super().__init__(
+            num_samples_to_plot=num_samples_to_plot,
+            num_features_to_plot=num_features_to_plot,
+            prefix=prefix,
+            save_path=save_path,
+        )
+        self.metric = metric
+        self.dataset_name = dataset_name
+
+    def update(
+        self,
+        obj: "AutoRegressiveLightning",
+        batch: "ItemBatch",
+        prediction: NamedTensor,
+        target: NamedTensor,
+        mask: torch.Tensor,
+    ) -> None:
+        """
+        Update. Should be called by on_{training/validation/test}_step
+        """
+        pred = deepcopy(prediction).tensor  # don’t modify input
+        targ = deepcopy(target).tensor
+        batch_copy = deepcopy(batch)
+
+        # Reshape outputs from GNNs to grid
+        if prediction.num_spatial_dims == 1:
+            pred = einops.rearrange(pred, "b t (x y) n -> b t x y n", x=obj.grid_shape[0])
+            targ = einops.rearrange(targ, "b t (x y) n -> b t x y n", x=obj.grid_shape[0])
+
+        if obj.trainer.is_global_zero and self.plotted_examples < self.num_samples_to_plot:
+            n_additional_examples = min(
+                pred.shape[0], self.num_samples_to_plot - self.plotted_examples
+            )
+
+            # Rescale to original data scale
+            std = obj.stats.to_list("std", prediction.feature_names).to(pred, non_blocking=True)
+            mean = obj.stats.to_list("mean", prediction.feature_names).to(pred, non_blocking=True)
+            prediction_rescaled = pred * std + mean
+            target_rescaled = targ * std + mean
+
+            for pred_slice, target_slice in zip(
+                prediction_rescaled[:n_additional_examples],
+                target_rescaled[:n_additional_examples],
+            ):
+                self.plotted_examples += 1
+
+                # compute variance ranges
+                self.metric.update(pred_slice, target_slice)
+                std_dict = self.metric.compute(prefix="test")
+                prediction_std = std_dict["preds"]
+                target_std = std_dict["targets"]
+
+                var_vmin = target_std.flatten(0, 2).min(dim=0)[0].cpu().numpy()
+                var_vmax = target_std.flatten(0, 2).max(dim=0)[0].cpu().numpy()
+                var_vranges = list(zip(var_vmin, var_vmax))
+
+                feature_names = (
+                    prediction.feature_names[: self.num_features_to_plot]
+                    if self.num_features_to_plot
+                    else prediction.feature_names
+                )
+
+                self.plot_map(
+                    obj,
+                    batch_copy,
+                    prediction_std,
+                    target_std,
+                    feature_names,
+                    var_vranges,
+                )
+
+    def plot_map(
+        self,
+        obj: "AutoRegressiveLightning",
+        batch: "ItemBatch",
+        prediction: torch.Tensor,
+        target: torch.Tensor,
+        feature_names: List[str],
+        var_vranges: List,
+    ) -> None:
+        # Prediction and target: (pred_steps, Nlat, Nlon, features)
+        paths_dict = defaultdict(list)
+        for t_i, (pred_t, target_t) in enumerate(zip(prediction, target), start=1):
+            units = [obj.dataset_info.units[name] for name in feature_names]
+            var_figs = [
+                plot_prediction(
+                    pred_t[:, :, var_i],
+                    target_t[:, :, var_i],
+                    obj.interior_2d[:, :, 0],
+                    title=f"{var_name} ({var_unit}), "
+                    f"t={t_i} ({obj.dataset_info.pred_step*t_i} h)",
+                    vrange=var_vrange,
+                    domain_info=obj.dataset_info.domain_info,
+                    cmap="viridis",
+                )
+                for var_i, (var_name, var_unit, var_vrange) in enumerate(
+                    zip(feature_names, units, var_vranges)
+                )
+            ]
+
+            tensorboard = obj.logger.experiment
+            for var_name, fig in zip(feature_names, var_figs):
+                fig_name = f"timestep_spread_evol_per_param/{var_name}_example_{self.plotted_examples}"
+                tensorboard.add_figure(fig_name, fig, t_i)
+                fig_full_name = f"{fig_name}_{t_i}.png"
+
+                if self.save_path is not None and self.save_path.exists():
+                    dest_file = self.save_path / fig_full_name
+                    paths_dict[var_name].append(dest_file)
+                    dest_file.parent.mkdir(exist_ok=True)
+                    fig.savefig(dest_file)
+
+                if obj.mlflow_logger:
+                    run_id = obj.mlflow_logger.version
+                    obj.mlflow_logger.experiment.log_figure(
+                        run_id=run_id,
+                        figure=fig,
+                        artifact_file=f"figures/{fig_full_name}",
+                    )
+
+                plt.close(fig)
+
+        # build gifs
+        for var_name, paths in paths_dict.items():
+            if len(paths) > 1:
+                make_gif(
+                    paths,
+                    self.save_path / f"timestep_spread_evol_per_param/{var_name}.gif",
+                )
+
 
 class PredictionEpochPlot(MapPlot):
     """
@@ -523,11 +667,25 @@ class StateErrorPlot(Plotter):
         Compute the metric. Append to a dictionnary
         """
         for name in self.metrics:
-            self.losses[name].append(
-                obj.trainer.strategy.reduce(
-                    self.metrics[name](prediction, target, mask), reduce_op="mean"
-                ).cpu()
-            )
+
+            if name == "std":
+                if not self.initialized:
+                    self.metrics[name].update(prediction, target)
+                    self.epoch_dict_loss = self.metrics[name].compute(prefix="test")
+                else:
+                    self.metrics[name].update(prediction, target)
+                    dict_loss = self.metrics[name].compute(prefix="test")
+                    for key, value in dict_loss.items():
+                        self.epoch_dict_loss[key] += value
+                    self.count+=1
+
+            else:
+                self.losses[name].append(
+                    obj.trainer.strategy.reduce(
+                        self.metrics[name](prediction, target, mask), reduce_op="mean"
+                    ).cpu()
+                )
+
         if not self.initialized:
             self.shortnames = prediction.feature_names
             self.units = [

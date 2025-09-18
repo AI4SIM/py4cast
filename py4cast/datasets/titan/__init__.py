@@ -157,8 +157,14 @@ class TitanAccessor(DataAccessor):
         param: WeatherParam,
         timestamps: Timestamps,
         file_format: Literal["npy", "grib"] = "grib",
+        num_input_steps: int = 1,
     ) -> bool:
-        for date in timestamps.validity_times:
+        if param.kind == "input":
+            # inputs/forcings only required after num_input_steps
+            valid_times = timestamps.validity_times[num_input_steps:]
+        else:
+            valid_times = timestamps.validity_times
+        for date in valid_times:
             filepath = self.get_filepath(ds_name, param, date, file_format)
             if not filepath.exists():
                 return False

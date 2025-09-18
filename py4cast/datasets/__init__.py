@@ -1,6 +1,6 @@
 import traceback
 import warnings
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Literal
 
 from .base import DatasetABC  # noqa: F401
 
@@ -47,6 +47,8 @@ def get_datasets(
     num_input_steps: int,
     num_pred_steps_train: int,
     num_pred_steps_val_test: int,
+    noise_members: int,
+    noise_strategy: Literal["forcing", "CondLayerNorm", "None"],
     dataset_conf: Dict | None = None,
 ) -> Tuple[DatasetABC, DatasetABC, DatasetABC]:
     """
@@ -76,4 +78,6 @@ def get_datasets(
         num_input_steps,
         num_pred_steps_train,
         num_pred_steps_val_test,
+        noise_members,
+        noise_strategy,
     )
